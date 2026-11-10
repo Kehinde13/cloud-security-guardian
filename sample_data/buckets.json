@@ -1,0 +1,35 @@
+{
+  "buckets": [
+    {
+      "name": "fictional-aurora-private-archive",
+      "publicAccessPrevention": "enforced",
+      "inheritedPublicAccessPrevention": false,
+      "uniformBucketLevelAccess": true,
+      "bindings": [{"role": "roles/storage.objectViewer", "members": ["group:analysts@example.invalid"]}]
+    },
+    {
+      "name": "fictional-aurora-public-assets",
+      "publicAccessPrevention": "inherited",
+      "inheritedPublicAccessPrevention": false,
+      "uniformBucketLevelAccess": true,
+      "bindings": [
+        {"role": "roles/storage.objectViewer", "members": ["allUsers"]},
+        {"role": "roles/storage.objectCreator", "members": ["allAuthenticatedUsers"]}
+      ]
+    },
+    {
+      "name": "fictional-aurora-unprotected-backups",
+      "publicAccessPrevention": "inherited",
+      "inheritedPublicAccessPrevention": false,
+      "uniformBucketLevelAccess": true,
+      "bindings": []
+    },
+    {
+      "name": "fictional-aurora-legacy-reports",
+      "publicAccessPrevention": "enforced",
+      "inheritedPublicAccessPrevention": false,
+      "uniformBucketLevelAccess": false,
+      "bindings": []
+    }
+  ]
+}
