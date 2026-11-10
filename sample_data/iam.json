@@ -1,0 +1,35 @@
+{
+  "policies": [
+    {
+      "resource": "projects/fictional-aurora-lab",
+      "bindings": [
+        {"role": "roles/owner", "members": ["serviceAccount:legacy-admin@fictional-aurora-lab.iam.gserviceaccount.com"]},
+        {"role": "roles/editor", "members": ["serviceAccount:batch-worker@fictional-aurora-lab.iam.gserviceaccount.com"]},
+        {"role": "roles/logging.logWriter", "members": ["serviceAccount:batch-worker@fictional-aurora-lab.iam.gserviceaccount.com"]}
+      ]
+    },
+    {
+      "resource": "//storage.googleapis.com/projects/_/buckets/fictional-aurora-reports",
+      "bindings": [
+        {"role": "roles/storage.objectViewer", "members": ["serviceAccount:report-reader@fictional-aurora-lab.iam.gserviceaccount.com"]},
+        {"role": "roles/storage.admin", "members": ["allUsers"]},
+        {"role": "roles/storage.objectViewer", "members": ["allAuthenticatedUsers"]}
+      ]
+    },
+    {
+      "resource": "//iam.googleapis.com/projects/fictional-aurora-lab/serviceAccounts/deploy-target@fictional-aurora-lab.iam.gserviceaccount.com",
+      "bindings": [
+        {"role": "roles/iam.serviceAccountTokenCreator", "members": ["serviceAccount:deployment-bot@fictional-aurora-lab.iam.gserviceaccount.com"]},
+        {
+          "role": "roles/iam.serviceAccountTokenCreator",
+          "members": ["serviceAccount:release-bot@fictional-aurora-lab.iam.gserviceaccount.com"],
+          "condition": {
+            "title": "fictional-release-window",
+            "description": "Fictional example of a time-limited binding; not evaluated by the scanner.",
+            "expression": "request.time < timestamp('2027-01-01T00:00:00Z')"
+          }
+        }
+      ]
+    }
+  ]
+}

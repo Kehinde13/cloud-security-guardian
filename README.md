@@ -1,7 +1,7 @@
 # Cloud Security Guardian
 
 A Python foundation for cloud security findings with read-only local Cloud
-Storage and VPC firewall scanners. No cloud SDK, network access, or remediation is used.
+Storage, VPC firewall, and IAM scanners. No cloud SDK, network access, or remediation is used.
 
 ## Setup
 
@@ -99,8 +99,8 @@ Results describe only supplied snapshot data. The scanner does not fetch or veri
 live policies, evaluate role permissions, inspect object/bucket ACLs, resolve
 inherited IAM grants, evaluate conditional IAM, or test actual reachability.
 It trusts the supplied parent-policy enforcement flag. HIGH public-binding findings
-identify risky grants, not verified effective access. General IAM scanning is
-outside the implemented scope.
+identify risky grants, not verified effective access. Separate IAM snapshot checks
+are described below.
 
 ## Firewall scanner
 
@@ -195,3 +195,126 @@ normalized schema. Multiple narrower CIDRs are not combined to infer universal
 coverage. The scanner does not fetch snapshots, contact Google Cloud, modify
 rules, or perform remediation. The earlier empty `sample_data/firewall_rules.json`
 placeholder is unused; `sample_data/firewalls.json` is the scanner input.
+
+## IAM scanner
+
+With the virtual environment active, run from the repository root:
+
+```powershell
+python -c "from security_guardian.scanners.iam import scan_iam; [print(f) for f in scan_iam()]"
+```
+
+`scan_iam(path)` accepts a string or `pathlib.Path` and returns `list[Finding]`.
+The default is the repository's `sample_data/iam.json`, independent of the working
+directory. It reads UTF-8 JSON, validates the entire snapshot before creating any
+findings, and evaluates bindings locally. Missing files raise `FileNotFoundError`;
+malformed JSON (including duplicate keys), invalid UTF-8, and invalid configurations
+raise contextual `ValueError`s. Other filesystem errors propagate. Inputs are
+opened only for reading. The old empty `iam_policies.json` placeholder is unused.
+
+### IAM snapshot schema
+
+This is a normalized allow-policy snapshot, not a raw API policy response. Extra
+fields are rejected; all fields below except `condition` are required.
+
+```json
+{
+  "policies": [{
+    "resource": "//iam.googleapis.com/projects/fictional-aurora-lab/serviceAccounts/target@fictional-aurora-lab.iam.gserviceaccount.com",
+    "bindings": [{
+      "role": "roles/iam.serviceAccountTokenCreator",
+      "members": ["serviceAccount:worker@fictional-aurora-lab.iam.gserviceaccount.com"],
+      "condition": {
+        "title": "release-window",
+        "expression": "request.time < timestamp('2027-01-01T00:00:00Z')",
+        "description": "Fictional limited release window"
+      }
+    }]
+  }]
+}
+```
+
+- `policies` and each `bindings` are lists and may be empty.
+- `resource` is the binding's scope, recorded as `projects/ID`, `folders/NUMBER`,
+  `organizations/NUMBER`, or a full `//SERVICE.googleapis.com/PATH` resource name.
+  For Token Creator, a service-account resource identifies the target, while the
+  member identifies the grantee. Project-scoped grants retain project scope.
+- Roles use `roles/NAME`, `projects/ID/roles/NAME`, or
+  `organizations/NUMBER/roles/NAME`. Role IDs contain letters, digits, underscores,
+  or periods. Custom roles named `owner` or `editor` are not basic Owner/Editor.
+- `members` is a non-empty list. Supported IAM v1 formats are `serviceAccount:EMAIL`,
+  `user:EMAIL`, `group:EMAIL`, `domain:DOMAIN`, `allUsers`, and
+  `allAuthenticatedUsers`. Service-account emails must end in `gserviceaccount.com`;
+  user-managed, Compute Engine/App Engine default, and service-agent formats are
+  supported. Deleted user/group/service-account members with
+  `deleted:TYPE:EMAIL?uid=NUMBER` are accepted but not treated as active grants.
+  Unsupported principal forms, including federated `principal://` and
+  `principalSet://` identifiers and legacy GKE members, raise clear errors rather
+  than being silently ignored. Strings cannot have surrounding whitespace.
+- Optional `condition` must contain non-empty string `title` and `expression`,
+  with optional string `description` and `location`. Omit it for unconditional
+  bindings; null is invalid. All supplied condition metadata is preserved.
+
+Formats are based on Google's [IAM principal identifiers](https://docs.cloud.google.com/iam/docs/principal-identifiers)
+and [allow-policy binding reference](https://docs.cloud.google.com/iam/docs/reference/rest/v1/Policy).
+Validation checks this documented subset's syntax, not identity existence, role
+existence, grantability at a particular scope, or whether Google accepts a given
+role/principal/condition combination.
+
+### IAM rules and evidence
+
+| Assignment | Severity | Interpretation |
+| --- | --- | --- |
+| Service account with `roles/owner` | HIGH | Replace Owner with narrowly scoped roles |
+| Service account with `roles/editor` | HIGH | Replace Editor with least-privilege roles |
+| Public principal with a listed broad role | HIGH | Broad public assignment requiring review |
+| Public principal with any other role | MEDIUM | Potential risk; sensitive access is not inferred |
+| Service account with `roles/iam.serviceAccountTokenCreator` | MEDIUM | Review target privileges, scope, and conditions |
+
+The explicit broad-public-role list is `roles/owner`, `roles/editor`, `roles/viewer`,
+`roles/iam.securityAdmin`, `roles/iam.serviceAccountAdmin`,
+`roles/resourcemanager.projectIamAdmin`, `roles/storage.admin`,
+`roles/compute.admin`, and `roles/bigquery.admin`. This is a conservative local
+review policy, not an exhaustive classifier. Unrecognized and custom roles remain
+MEDIUM for public assignments; the scanner does not guess their permissions from
+their names. Public principals are reported separately: `allUsers` includes
+anonymous users, while `allAuthenticatedUsers` includes authenticated Google
+accounts and service accounts outside the organization.
+
+Conditions are preserved but never evaluated or assumed restrictive. Severity is
+not reduced merely because a condition exists; conditional findings explicitly
+say the expression was not evaluated. A public binding does not establish effective
+access. Token Creator is not inherently exploitable; actual risk depends on the
+target service account, scope, and conditions. See Google's
+[service account authentication roles](https://docs.cloud.google.com/iam/docs/service-account-permissions)
+and [IAM Conditions overview](https://docs.cloud.google.com/iam/docs/conditions-overview).
+
+Findings use the binding scope as `resource`, identify the grantee and role in the
+issue, and include JSON evidence with `resource`, `role`, `member`, and the complete
+`condition` (null when absent). Findings follow snapshot/member order. Repeated
+scope/role/member/condition combinations are suppressed, including duplicate
+members, reordered condition keys, and repeated policies. Different scopes,
+roles, or condition metadata remain distinct. Resource aliases and logically
+equivalent CEL expressions are not normalized.
+
+### IAM sample results and limitations
+
+The fictional sample produces six findings:
+
+| Assignment | Result |
+| --- | --- |
+| `legacy-admin` with Owner | HIGH |
+| `batch-worker` with Editor and Log Writer | One HIGH for Editor |
+| `report-reader` with bucket Object Viewer | None under these rules |
+| `allUsers` with Storage Admin | HIGH |
+| `allAuthenticatedUsers` with Object Viewer | MEDIUM |
+| `deployment-bot` with Token Creator on a target account | MEDIUM |
+| `release-bot` with conditional Token Creator | MEDIUM; condition retained |
+
+No findings does not prove least privilege. The scanner does not expand groups,
+resolve inherited policies, inspect custom-role permissions, evaluate CEL, or
+apply deny policies, principal access boundaries, organization policies, or
+service-specific public-access controls. It does not check whether a principal
+can actually use its assigned permissions. Findings concern supplied bindings,
+not verified access or exploitability. No Google Cloud API calls, policy writes,
+or automatic remediation occur. Storage and Firewall scanners remain independent.
