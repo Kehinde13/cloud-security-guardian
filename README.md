@@ -1,7 +1,7 @@
 # Cloud Security Guardian
 
-A Python foundation for cloud security findings with a read-only local Cloud
-Storage configuration scanner. No cloud SDK, network access, or remediation is used.
+A Python foundation for cloud security findings with read-only local Cloud
+Storage and VPC firewall scanners. No cloud SDK, network access, or remediation is used.
 
 ## Setup
 
@@ -99,5 +99,99 @@ Results describe only supplied snapshot data. The scanner does not fetch or veri
 live policies, evaluate role permissions, inspect object/bucket ACLs, resolve
 inherited IAM grants, evaluate conditional IAM, or test actual reachability.
 It trusts the supplied parent-policy enforcement flag. HIGH public-binding findings
-identify risky grants, not verified effective access. Firewall and general IAM
-scanning are outside this milestone.
+identify risky grants, not verified effective access. General IAM scanning is
+outside the implemented scope.
+
+## Firewall scanner
+
+With the virtual environment active, run from the repository root:
+
+```powershell
+python -c "from security_guardian.scanners.firewall import scan_firewalls; [print(f) for f in scan_firewalls()]"
+```
+
+`scan_firewalls(path)` accepts a string or `pathlib.Path` and returns existing
+`Finding` objects. Its default is `sample_data/firewalls.json`, resolved relative
+to the repository, independent of the current directory. It reads UTF-8 JSON,
+validates the complete snapshot (including disabled, egress, and DENY rules),
+then evaluates eligible rules. Missing files raise `FileNotFoundError`; invalid
+JSON, UTF-8, or configuration raises `ValueError` with file and field context.
+Other filesystem errors propagate. No partial results are returned on failure.
+
+### Firewall snapshot schema
+
+This explicit normalized schema is not a raw Google Cloud API response. It uses
+`action` and `protocols` in place of API `allowed`/`denied` objects. All rule fields
+shown below are required; only `ports` is optional. Extra fields are rejected.
+
+```json
+{
+  "firewalls": [{
+    "name": "fictional-example-ssh",
+    "direction": "INGRESS",
+    "action": "ALLOW",
+    "disabled": false,
+    "sourceRanges": ["192.0.2.0/24"],
+    "protocols": [{"protocol": "tcp", "ports": ["22"]}]
+  }]
+}
+```
+
+- `firewalls`: list, possibly empty. Rule names must be unique non-empty strings
+  without surrounding whitespace; snapshots should use one naming scope.
+- `direction`: `INGRESS` or `EGRESS`; `action`: `ALLOW` or `DENY`.
+- `disabled`: a JSON boolean, not a string or integer.
+- Ingress requires a non-empty `sourceRanges` list. Egress instead requires a
+  non-empty `destinationRanges` list. Entries must be IPv4 or IPv6 network CIDRs
+  with explicit prefixes and no host bits. The normalized snapshot accepts both
+  address families in a list. Missing or empty lists are errors, never implicit
+  unrestricted access. Exporters must materialize any GCP defaults explicitly.
+- `protocols`: non-empty list of objects with `protocol` and optional `ports`.
+  Protocols are lowercase `tcp`, `udp`, `icmp`, `esp`, `ah`, `sctp`, `ipip`, `all`,
+  or decimal protocol-number strings from `0` to `255`. `6` is TCP; `17` is UDP.
+- `ports`: permitted only for TCP/UDP, as a list of strings such as `"22"` or
+  `"20-3400"`. Ranges are inclusive and must be ordered within `0-65535`.
+  Omitted or empty ports means all ports of that protocol. `all` includes TCP
+  and must omit ports. Non-TCP protocols do not produce SSH/RDP findings.
+
+Protocol-wide allowances and unrestricted source semantics follow
+[Google's VPC firewall documentation](https://docs.cloud.google.com/firewall/docs/firewalls).
+
+### Firewall detection rules
+
+Only enabled ingress ALLOW rules are evaluated for exposure. A HIGH finding is
+returned for each service (SSH/TCP 22 and RDP/TCP 3389) permitted from an explicit
+IPv4 `0.0.0.0/0` or IPv6 `::/0`. Equivalent IPv6 notation is normalized.
+Exact ports, inclusive ranges, protocol-wide TCP, and `all` are supported.
+Narrower CIDRs are not automatically flagged, even if they contain public IPs.
+Disabled, egress, and DENY rules produce no findings.
+
+Findings are ordered by input rule, then SSH and RDP. Multiple matching entries
+and source families are consolidated into one finding per rule/service.
+Each finding includes the rule name, HIGH severity, a recommendation, and JSON
+evidence containing the service, port, unrestricted sources, matching protocol
+entries, direction, action, and disabled state.
+
+The seven fictional sample rules produce six HIGH findings:
+
+| Rule suffix | Findings |
+| --- | --- |
+| `restricted-ssh` | None |
+| `public-ssh` | SSH |
+| `public-rdp` | RDP |
+| `disabled-ingress` | None |
+| `egress` | None |
+| `public-range` | SSH and RDP |
+| `ipv6-tcp` | SSH and RDP |
+
+### Firewall limitations
+
+Findings describe potential exposure in a supplied rule, not proven internet
+reachability. Target applicability, higher-priority rules, hierarchical policies,
+routes, external addresses, listening services, and other controls are not
+evaluated. DENY rules are not used to suppress findings on other rules. Target
+selectors, source tags/service accounts, and policy priorities are outside this
+normalized schema. Multiple narrower CIDRs are not combined to infer universal
+coverage. The scanner does not fetch snapshots, contact Google Cloud, modify
+rules, or perform remediation. The earlier empty `sample_data/firewall_rules.json`
+placeholder is unused; `sample_data/firewalls.json` is the scanner input.

@@ -1,0 +1,39 @@
+{
+  "firewalls": [
+    {
+      "name": "fictional-aurora-restricted-ssh", "direction": "INGRESS",
+      "action": "ALLOW", "disabled": false, "sourceRanges": ["192.0.2.0/24"],
+      "protocols": [{"protocol": "tcp", "ports": ["22"]}]
+    },
+    {
+      "name": "fictional-aurora-public-ssh", "direction": "INGRESS",
+      "action": "ALLOW", "disabled": false, "sourceRanges": ["0.0.0.0/0"],
+      "protocols": [{"protocol": "tcp", "ports": ["22"]}]
+    },
+    {
+      "name": "fictional-aurora-public-rdp", "direction": "INGRESS",
+      "action": "ALLOW", "disabled": false, "sourceRanges": ["0.0.0.0/0"],
+      "protocols": [{"protocol": "tcp", "ports": ["3389"]}]
+    },
+    {
+      "name": "fictional-aurora-disabled-ingress", "direction": "INGRESS",
+      "action": "ALLOW", "disabled": true, "sourceRanges": ["0.0.0.0/0"],
+      "protocols": [{"protocol": "tcp"}]
+    },
+    {
+      "name": "fictional-aurora-egress", "direction": "EGRESS",
+      "action": "ALLOW", "disabled": false, "destinationRanges": ["0.0.0.0/0"],
+      "protocols": [{"protocol": "tcp"}]
+    },
+    {
+      "name": "fictional-aurora-public-range", "direction": "INGRESS",
+      "action": "ALLOW", "disabled": false, "sourceRanges": ["0.0.0.0/0"],
+      "protocols": [{"protocol": "tcp", "ports": ["20-3400"]}]
+    },
+    {
+      "name": "fictional-aurora-ipv6-tcp", "direction": "INGRESS",
+      "action": "ALLOW", "disabled": false, "sourceRanges": ["::/0"],
+      "protocols": [{"protocol": "tcp"}]
+    }
+  ]
+}
