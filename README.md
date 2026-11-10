@@ -318,3 +318,74 @@ service-specific public-access controls. It does not check whether a principal
 can actually use its assigned permissions. Findings concern supplied bindings,
 not verified access or exploitability. No Google Cloud API calls, policy writes,
 or automatic remediation occur. Storage and Firewall scanners remain independent.
+
+## Unified scan report
+
+`security_guardian.services.scan_service.run_scan()` runs Storage, Firewall, then
+IAM sequentially using their existing APIs. Each scanner validates its snapshot.
+Only after all three succeed does the service construct a typed
+`security_guardian.models.scan_report.ScanReport`. Finding objects and their
+contents are preserved; the service does not rewrite, sort, or deduplicate them.
+
+From the repository root with the virtual environment active:
+
+```powershell
+python -c "from security_guardian.services.scan_service import run_scan; r = run_scan(); print(r.timestamp.isoformat()); print('Total:', r.total_findings); print('Severity:', {k: len(v) for k, v in r.findings_by_severity.items()}); print('Scanner:', {k: len(v) for k, v in r.findings_by_scanner.items()})"
+```
+
+The default inputs are the three existing fictional samples, resolved relative
+to the repository. Callers can override any or all inputs with strings or Paths:
+
+```python
+from security_guardian.services.scan_service import ScanError, run_scan
+
+try:
+    report = run_scan(
+        storage_path="sample_data/buckets.json",
+        firewall_path="sample_data/firewalls.json",
+        iam_path="sample_data/iam.json",
+    )
+except ScanError as error:
+    print(f"Failed scanner: {error.scanner}; input: {error.path}")
+    raise
+
+for finding in report.findings:
+    print(finding.resource, finding.severity, finding.issue)
+```
+
+Explicit relative paths resolve against the caller's current working directory.
+
+### Report structure
+
+| Field | Type and meaning |
+| --- | --- |
+| `timestamp` | Timezone-aware `datetime` in UTC recording successful completion |
+| `total_findings` | Integer count of the complete list |
+| `findings_by_severity` | Lists of original `Finding` objects keyed by `HIGH`, `MEDIUM`, `LOW` |
+| `findings_by_scanner` | Lists keyed by `storage`, `firewall`, `iam` |
+| `findings` | Complete `list[Finding]`, in scanner order and each scanner's original order |
+
+All group keys remain present when empty. Group counts are obtained with `len()`.
+The report derives totals and severity groups from scanner groups and copies list
+containers while retaining original Finding references. Timestamps supplied when
+constructing the model must be timezone-aware and are normalized to UTC.
+For identical input snapshots, report contents and ordering are deterministic
+apart from the completion timestamp.
+
+The existing samples yield **17 findings**: **11 HIGH, 6 MEDIUM, 0 LOW**.
+Scanner counts are **storage: 5, firewall: 6, iam: 6**.
+
+### Errors and limitations
+
+If a scanner raises an exception, `run_scan()` raises `ScanError` naming the
+scanner, input path, and original error. The original exception remains available
+as `error.__cause__`. Execution stops at that scanner; later scanners are not run,
+and no successful partial report is returned. Process interrupts are not wrapped.
+
+Reports are in-memory Python dataclasses, not a JSON export format. Their lists
+and Finding objects remain mutable; callers should treat completed reports as
+read-only because later mutation does not recalculate totals or groups. There is
+no cross-scanner deduplication or correlation, retry, atomic snapshot capture,
+live cloud access, network call, policy modification, or remediation. Existing
+scanner scope and effective-access limitations still apply. No ADK, Gemini,
+credentials, or other integration is introduced.
