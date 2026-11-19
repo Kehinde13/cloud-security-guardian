@@ -1,1 +1,2 @@
 pytest
+google-adk==2.14.1

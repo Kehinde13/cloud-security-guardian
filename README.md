@@ -1,7 +1,8 @@
 # Cloud Security Guardian
 
 A Python foundation for cloud security findings with read-only local Cloud
-Storage, VPC firewall, and IAM scanners. No cloud SDK, network access, or remediation is used.
+Storage, VPC firewall, and IAM scanners, plus a separate minimal Google ADK agent.
+The deterministic scanning engine uses local snapshots without network access or remediation.
 
 ## Setup
 
@@ -388,7 +389,7 @@ read-only because later mutation does not recalculate totals or groups. There is
 no cross-scanner deduplication or correlation, retry, atomic snapshot capture,
 live cloud access, network call, policy modification, or remediation. Existing
 scanner scope and effective-access limitations still apply. No ADK, Gemini,
-credentials, or other integration is introduced.
+credentials, or other integration is introduced by the unified scanning service.
 
 ## JSON report serialization (schema 1.0)
 
@@ -483,3 +484,112 @@ are introduced by serialization.
 
 The full fictional sample export contains **17 findings**, with **11 HIGH and
 6 MEDIUM**, attributed to **storage: 5, firewall: 6, iam: 6**.
+
+## Google ADK foundation (Milestone 5.3.1)
+
+ADK provides the agent framework; Gemini is the language model it can call.
+The existing deterministic engine validates snapshots and computes findings using
+Python rules. The new agent currently has no connection to that engine. Importing
+it constructs an agent definition only, with no tools, model requests, credential
+lookup, report interpretation, persistent sessions, or remediation.
+
+```text
+agents/
+  __init__.py
+  cloud_security_guardian/
+    __init__.py       # exposes agent module for ADK discovery
+    agent.py          # root_agent, named cloud_security_guardian
+    .env.example     # configuration template, no secrets
+tests/
+  test_agent.py      # real ADK import checks in isolated offline processes
+```
+
+### Research and requirements
+
+Checked on November 19, 2026: the stable release is pinned as
+`google-adk==2.14.1`; pytest remains in `requirements.txt`. Official
+[PyPI metadata](https://pypi.org/project/google-adk/2.14.1/) and the
+[tagged project metadata](https://github.com/google/adk-python/blob/v2.14.1/pyproject.toml)
+require Python >=3.11 and explicitly list Python 3.14. The generic quickstart still
+mentions 3.10; use the pinned release's metadata for the actual minimum.
+The existing Windows Python 3.14.3 virtual environment is retained.
+Installation and `pip check` succeeded in this environment. Verification passed
+all 310 tests: the existing 303 cases plus 7 offline agent cases.
+
+Install into that environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m pip check
+```
+
+Only base ADK is requested, without optional integration extras. ADK brings its
+own transitive dependencies, including the Gen AI client; the project does not
+add Google Cloud resource SDKs. Only the direct ADK version is pinned, so this is
+not a complete transitive dependency lock.
+
+### Configuration
+
+`GUARDIAN_GEMINI_MODEL` is a project-specific environment variable read once on
+module import. Its default is `gemini-flash-latest`, the model selector documented
+in Google's [Gemini configuration guide](https://adk.dev/agents/models/google-gemini/).
+Overrides must match a non-empty `gemini-...` model ID without whitespace; invalid
+values raise ValueError. This checks syntax, not remote model availability.
+Restart the process to apply changes. The alias can change its underlying model.
+No live model availability or authentication check is performed in this milestone.
+
+Direct Python imports read the process environment and do not load `.env` files.
+The ADK CLI handles its agent-local `.env` file. For a future live Gemini Developer
+API session, copy the template to `agents/cloud_security_guardian/.env` and supply
+`GOOGLE_API_KEY` locally. Offline imports and tests need no key or `.env` file.
+This configuration targets the Developer API; no Vertex/Enterprise backend,
+project ID, region, or Application Default Credentials are needed. Clear any
+inherited cloud-backend selector before intentionally using the Developer API.
+
+Real `.env` files, `.adk` artifacts, credential directories, common credential JSON
+names, and private-key formats are ignored by Git. `.env.example` remains trackable.
+Keep any future credential files in `credentials/` or `secrets/`; ignore patterns
+cannot identify arbitrary secrets saved under other names or untrack existing files.
+
+### Local verification and execution
+
+These commands run offline and require no credentials:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_agent.py
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -c "from agents.cloud_security_guardian.agent import root_agent; print(root_agent.name, root_agent.model, root_agent.tools)"
+```
+
+Tests start fresh Python processes with a minimal environment, block outbound
+socket activity and default credential discovery, and import the real ADK agent.
+They check its metadata, empty tools, default/overridden model, and invalid config.
+
+Google's [Python quickstart](https://adk.dev/get-started/python/) documents the
+agent.py / __init__.py layout and interactive CLI. After explicitly configuring
+credentials, the supported CLI entry point from the repository root is:
+
+```powershell
+.\.venv\Scripts\adk.exe run --session_service_uri memory:// --artifact_service_uri memory:// --memory_service_uri memory:// agents/cloud_security_guardian
+```
+
+This interactive command can issue paid Gemini requests when you send a prompt;
+it is documented for later use and is not part of offline verification. Do not
+enable session saving or supply a persistent session service for this foundation.
+The explicit service URIs keep sessions, artifacts, and memory in process; this
+avoids ADK 2.14.1's default local storage and automatic cloud service selection.
+ADK also offers `adk web`, but no web interface or server is implemented or started
+by this milestone. Model-backed ADK evaluations are likewise outside offline tests.
+
+### Current limits and next milestone
+
+The agent instructions require it to state its capabilities and never claim to
+have scanned resources or verified findings. These are instructions, not a proven
+guarantee about future model responses. With no registered tools, it cannot invoke
+the scanners. Import behavior and configuration are verified offline; model
+responses, credentials, and live inference are deliberately untested.
+
+Milestone 5.3.2 will introduce a separately tested, read-only scan tool around the
+existing unified scanning API. That tool is planned and is not registered here.
+No report explanation, multi-agent workflow, collection, deployment, or automatic
+remediation is implemented in this foundation.

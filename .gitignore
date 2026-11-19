@@ -11,3 +11,16 @@ dist/
 htmlcov/
 .coverage
 /reports/
+.env
+.env.*
+!.env.example
+.adk/
+credentials/
+secrets/
+credentials*.json
+service-account*.json
+application_default_credentials.json
+*.pem
+*.key
+*.p12
+*.pfx
