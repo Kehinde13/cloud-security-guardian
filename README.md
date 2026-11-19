@@ -382,10 +382,104 @@ scanner, input path, and original error. The original exception remains availabl
 as `error.__cause__`. Execution stops at that scanner; later scanners are not run,
 and no successful partial report is returned. Process interrupts are not wrapped.
 
-Reports are in-memory Python dataclasses, not a JSON export format. Their lists
+Reports are in-memory Python dataclasses; JSON export is described below. Their lists
 and Finding objects remain mutable; callers should treat completed reports as
 read-only because later mutation does not recalculate totals or groups. There is
 no cross-scanner deduplication or correlation, retry, atomic snapshot capture,
 live cloud access, network call, policy modification, or remediation. Existing
 scanner scope and effective-access limitations still apply. No ADK, Gemini,
 credentials, or other integration is introduced.
+
+## JSON report serialization (schema 1.0)
+
+The dedicated `security_guardian.services.report_serialization` module provides
+`report_to_dict(report)`, `report_to_json(report)`, `validate_report_dict(data)`,
+and `export_report(report, path, overwrite=False)`.
+
+```python
+from pathlib import Path
+from security_guardian.services.scan_service import run_scan
+from security_guardian.services.report_serialization import (
+    report_to_dict, report_to_json, validate_report_dict, export_report,
+)
+
+report = run_scan()
+data = report_to_dict(report)
+validate_report_dict(data)  # Returns None on success, raises ValueError otherwise
+text = report_to_json(report)
+Path("reports").mkdir(exist_ok=True)
+export_report(report, "reports/security_report.json")
+```
+
+Generated `reports/` files are ignored by Git. Export requires an existing parent
+directory and a `.json` extension. An existing destination raises `FileExistsError`;
+pass `overwrite=True` explicitly to replace it. Other filesystem failures raise
+contextual `OSError`s with their original exception chained.
+
+### JSON structure and ordering
+
+The following is a complete illustrative one-finding report, not the full sample:
+
+```json
+{
+  "schema_version": "1.0",
+  "timestamp": "2026-11-10T12:00:00.000000Z",
+  "total_findings": 1,
+  "severity_counts": {"HIGH": 1, "MEDIUM": 0, "LOW": 0},
+  "scanner_counts": {"storage": 1, "firewall": 0, "iam": 0},
+  "findings": [
+    {
+      "scanner": "storage",
+      "resource": "fictional-example-bucket",
+      "severity": "HIGH",
+      "issue": "Illustrative risky bucket configuration",
+      "recommendation": "Review the bucket configuration",
+      "evidence": null
+    }
+  ]
+}
+```
+
+Field order follows this example. Severity keys are HIGH/MEDIUM/LOW; scanner keys
+are storage/firewall/iam. Findings retain each scanner's original order, grouped
+in that scanner order. Equal findings are not removed. Attribution is carried by
+the serialized `scanner` field without changing the Finding model. All Finding
+fields are preserved; absent optional evidence is JSON null and empty evidence
+remains an empty string. Evidence containing JSON remains a string, not an object.
+
+Timestamps are normalized to UTC with six fractional digits and `Z`. JSON uses
+two-space indentation and a final newline. Non-ASCII characters are escaped by
+the encoder and round-trip without loss. Output is deterministic for an unchanged
+report, including its timestamp. Different scan runs naturally have different
+timestamps. `report_to_dict` returns independent containers.
+
+### Validation, export safety, and limitations
+
+Serialization rejects stale or inconsistent model totals, scanner groups, severity
+groups, and finding order. The dictionary validator enforces exact schema fields,
+version 1.0, UTC timestamps, string finding fields, string-or-null evidence,
+recognized severities and scanners, non-negative integer counts (not booleans),
+and counts matching the actual findings. Unknown versions or extra fields fail
+explicitly. It does not re-evaluate the security findings.
+
+Validation and JSON encoding finish before filesystem changes. Export writes and
+flushes a same-directory temporary file, syncs it, then atomically publishes the
+complete file. Default publication uses a hard link to prevent overwriting even
+if another writer creates the destination concurrently. Explicit overwrite uses
+atomic replacement. Filesystems without hard-link support fail safely rather than
+falling back to an unsafe write. Temporary files are removed on ordinary failures;
+cleanup failures are reported. A process crash can leave a temporary file, and
+power-loss durability depends on filesystem guarantees. A cleanup error after
+publication may leave a complete report at the destination.
+
+Resource names, issues, recommendations, and evidence are untrusted text. They
+are encoded as data, never executed, interpolated as commands, or parsed as code.
+The serializer reads no credentials, environment variables, or unrelated files.
+It does not redact secrets already placed in findings; callers must control report
+contents and export locations. JSON escaping is not HTML sanitization for future
+consumers. Concurrent mutation of the in-memory report during serialization is
+unsupported. No network calls, cloud modifications, remediation, or AI integration
+are introduced by serialization.
+
+The full fictional sample export contains **17 findings**, with **11 HIGH and
+6 MEDIUM**, attributed to **storage: 5, firewall: 6, iam: 6**.
