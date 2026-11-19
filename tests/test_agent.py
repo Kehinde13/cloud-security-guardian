@@ -33,17 +33,19 @@ def import_in_fresh_process(model=None):
         socket.getaddrinfo = forbidden
         import google.auth
         google.auth.default = forbidden
+        import security_guardian.services.scan_service as scans
+        scans.run_scan = forbidden
         from agents.cloud_security_guardian import agent
+        from agents.cloud_security_guardian.tools import scan_security_configuration
         from google.adk.agents import LlmAgent
         root = agent.root_agent
         assert isinstance(root, LlmAgent)
         assert root.name == "cloud_security_guardian"
-        assert root.description == "Read-only Cloud Security Guardian foundation; no scanning tools are connected."
-        assert root.tools == []
+        assert root.description == "Read-only Cloud Security Guardian for fictional local configuration snapshots."
+        assert root.tools == [scan_security_configuration]
         assert root.sub_agents == []
         assert root.code_executor is None
-        assert "Never claim to have performed security scans" in root.instruction
-        assert not any(name.startswith("security_guardian.scanners") for name in sys.modules)
+        assert "Never claim a successful scan" in root.instruction
         print(root.model)
     ''')
     return subprocess.run([sys.executable, "-B", "-c", script], cwd=ROOT,

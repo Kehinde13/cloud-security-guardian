@@ -487,6 +487,9 @@ The full fictional sample export contains **17 findings**, with **11 HIGH and
 
 ## Google ADK foundation (Milestone 5.3.1)
 
+This section records the original foundation. Milestone 5.3.2 below supersedes
+the no-tool behavior and instructions; model and environment configuration remain unchanged.
+
 ADK provides the agent framework; Gemini is the language model it can call.
 The existing deterministic engine validates snapshots and computes findings using
 Python rules. The new agent currently has no connection to that engine. Importing
@@ -593,3 +596,81 @@ Milestone 5.3.2 will introduce a separately tested, read-only scan tool around t
 existing unified scanning API. That tool is planned and is not registered here.
 No report explanation, multi-agent workflow, collection, deployment, or automatic
 remediation is implemented in this foundation.
+
+
+## Read-only scan tool (Milestone 5.3.2)
+
+The agent now registers exactly one no-argument Python function,
+`scan_security_configuration`, in `agents/cloud_security_guardian/tools.py`.
+The package retains `agent.py`, `__init__.py`, and `.env.example`.
+The [official ADK function-tool documentation](https://adk.dev/tools-custom/function-tools/)
+describes automatic wrapping of functions supplied in an agent's `tools` list.
+This behavior was also checked in installed google-adk 2.14.1; offline tests
+verify the generated function declaration has no input parameters.
+
+Execution flow: `root_agent.tools` ? `scan_security_configuration()` ?
+`run_scan()` ? Storage/Firewall/IAM scanners ? `report_to_dict()` ? response.
+Importing the agent registers the function but does not execute a scan.
+The wrapper reuses scanning and validation without changing engine behavior.
+
+### Response contract
+
+Success returns exactly `{"status": "success", "report": <complete schema 1.0 report>}`.
+The nested report is the existing serializer output, preserving timestamp,
+counts, scanner attribution, findings, and evidence. For example, this executable
+snippet obtains the complete successful response without a model call:
+
+```python
+from agents.cloud_security_guardian.tools import scan_security_configuration
+response = scan_security_configuration()
+assert response["status"] == "success"
+assert response["report"]["total_findings"] == 17
+# severity_counts: {"HIGH": 11, "MEDIUM": 6, "LOW": 0}
+# scanner_counts: {"storage": 5, "firewall": 6, "iam": 6}
+```
+
+A scan failure returns:
+
+```json
+{"status": "error", "error": {"code": "SCAN_FAILED", "message": "The local sample scan could not be completed."}}
+```
+
+A report validation/serialization failure returns:
+
+```json
+{"status": "error", "error": {"code": "SERIALIZATION_FAILED", "message": "The scan report could not be validated for delivery."}}
+```
+
+Failures never contain a report, partial findings, exception text, paths, or
+tracebacks. The stage identifies where processing failed. Ordinary exceptions,
+including unexpected ones at this tool boundary, use these fixed responses;
+process interrupts propagate. Original traceback and chained exception context
+are available only through opt-in DEBUG logging for this module. No logging
+handlers or files are created here. Debug logs can contain internal details:
+keep them in a trusted diagnostic channel and never return them to the agent.
+
+### Boundaries and offline verification
+
+The function accepts no arguments or model-selected paths. It uses `run_scan()`'s
+repository-relative defaults: `sample_data/buckets.json`, `firewalls.json`, and
+`iam.json`, independently of the current working directory. It performs no export,
+configuration changes, cloud access, or model requests. Local repository contents
+are trusted operator-controlled inputs; this is not an OS sandbox against local
+file replacement or symlinks. Findings and evidence remain untrusted data, are
+not executed, and are not redacted by this wrapper. Keep snapshots fictional and
+free of secrets. These findings do not prove effective access or live cloud state.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_agent.py tests/test_agent_tools.py
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pip check
+git diff --check
+```
+
+Offline coverage blocks network access, checks cold imports without credentials
+or scan execution, checks exact sample totals and finding preservation, rejects
+write attempts during real tool execution, and exercises safe failure responses.
+No live ADK/Gemini conversation is tested. Agent instructions received only the
+minimal changes needed to describe tool use and failures. Comprehensive agent
+instructions are planned for Milestone 5.3.3. No additional tools, AI report
+explanations, response validation, persistent sessions, or remediation are added.
