@@ -882,5 +882,70 @@ git diff --check
 ```
 
 Tests use synthetic candidates and the real fictional sample report, with network
-and credential discovery blocked during integration coverage. Milestone 5.3.5,
-Agent Testing, is the next planned step; no live model evaluations were added.
+and credential discovery blocked during integration coverage. Milestone 5.3.5
+below adds offline Runner workflows; no live model evaluations were added.
+
+
+## Offline agent workflows (Milestone 5.3.5)
+
+`tests/test_agent_workflows.py` executes the existing agent configuration through
+ADK 2.14.1's real `Runner.run_async`, `InMemorySessionService`, function-tool
+dispatch, and event handling. A cloned agent substitutes only a test-local
+`BaseLlm` subclass. Its `generate_content_async` yields deterministic `LlmResponse`
+objects: a function call, then synthetic analysis derived from the actual tool
+response in the next model request. It does not implement an alternative agent
+framework or invoke Gemini. The production agent and its model remain unchanged.
+
+Official references consulted and checked against installed APIs:
+
+- [ADK runtime](https://adk.dev/runtime/) and [session handling](https://adk.dev/sessions/session/).
+- [Function tools](https://adk.dev/tools-custom/function-tools/) and [events](https://adk.dev/events/).
+- [Agent evaluation guidance](https://adk.dev/evaluate/) for the distinction between
+  tool trajectories and response quality; these tests do not run model evaluations.
+- The [versioned BaseLlm source](https://github.com/google/adk-python/blob/v2.14.1/src/google/adk/models/base_llm.py)
+  and installed `BaseLlm.generate_content_async` extension point supply fake
+  model responses; `LlmResponse`, `Content`, and function-call parts use real ADK
+  and Gen AI types. No external testing utility or new dependency is required.
+
+Each test owns a fresh in-memory session and closes the Runner. Model requests
+are recorded so assertions can inspect the tool result delivered to the model.
+The real scanner runs against fictional samples with only its completion timestamp
+fixed for reproducibility. Event IDs and timings are not asserted. Windows asyncio
+creates its local loopback wakeup socket before network guards are installed;
+all subsequent socket connects, DNS lookups, and credential discovery are blocked.
+File writes through Python open functions and common filesystem mutations are
+blocked during workflow execution. Earlier tool tests retain their lower-level
+write protection checks; earlier cold-import tests still prohibit scans and
+network activity on import. No credentials or persistent sessions are needed.
+
+Covered workflows include a requested scan, a real 17-finding report, function-call
+and function-response events, synthetic structured output, explicit successful
+validation, and rejection of incorrect severity, resource, reference, coverage,
+counts, structure, or unsupported remediation fields. Scan and serialization
+failures produce safe error responses, with no report or fabricated findings in
+the scripted final response. A conversational script invokes no tools.
+
+Injection fixtures put instruction-like text in resource names and evidence. The
+text survives unchanged as data in the function response and the next model
+request; the event trace contains only the registered read-only scan call.
+This verifies the scripted data path, not a real model's resistance to injection.
+The fake model's tool choice and failure wording are predetermined, so these tests
+do not establish instruction compliance, reasoning quality, or hallucination rates.
+
+The tests explicitly call `validate_analysis` after collecting final output.
+The Runner is demonstrated to return inconsistent output before that call:
+there is no runtime validation enforcement. Extra remediation fields fail schema
+validation, but harmful recommendations expressed as ordinary prose can pass.
+A dedicated test records that limitation and confirms no action is executed.
+Validation does not authorize remediation or judge free-form advice.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_agent_workflows.py
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pip check
+git diff --check
+```
+
+Milestone 5.3.6, Local Integration, is planned to connect local execution and
+explicit validation handling at the application boundary. That integration,
+retries, live model calls, and runtime enforcement are not implemented here.
