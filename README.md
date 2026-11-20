@@ -756,5 +756,131 @@ git diff --check
 ```
 
 Existing cold-import tests continue to block network and credential discovery and
-forbid scan execution during initialization. Milestone 5.3.4, Response Validation,
-is the next planned step and is not implemented in this milestone.
+forbid scan execution during initialization. Independent response validation is
+implemented in Milestone 5.3.4 below; live runtime enforcement remains planned.
+
+
+## Structured analysis validation (Milestone 5.3.4)
+
+`response_models.py` defines strict Pydantic models; `response_validation.py`
+compares a candidate with an authoritative serialized report. Both reside in
+`agents/cloud_security_guardian/`. This is a full-scan analysis contract, not a
+required format for ordinary questions or failed scans. The existing agent,
+instructions, single scan tool, and tool response contract remain unchanged.
+
+### Contract and references
+
+`SecurityAnalysis` requires every field below and rejects extra fields at every
+level. No type coercion is allowed; counts and references are non-negative
+integers (booleans are rejected). Prose fields must contain non-whitespace text.
+
+| Field | Type / meaning |
+| --- | --- |
+| executive_summary | Nonblank generated text |
+| total_findings | Non-negative integer matching the report |
+| severity_counts | Exactly HIGH, MEDIUM, LOW integer counts |
+| findings | List of FindingExplanation objects |
+| analysis_limitations | Nonempty list of nonblank strings |
+
+Each finding explanation requires `finding_index`, `scanner`, `resource`,
+`severity`, `explanation`, `potential_implications`, and `recommended_action`.
+Scanner values are storage/firewall/iam; severities are HIGH/MEDIUM/LOW.
+`finding_index` is the zero-based position in the supplied report's `findings`
+list, valid only for that particular report and ordering. Resource names alone
+are not identifiers: multiple findings may share a resource. Explanations can
+be reordered for presentation, but each source index must occur exactly once.
+
+### Validation API and illustrative examples
+
+`validate_analysis(candidate, source_report)` accepts a candidate dictionary and
+the schema 1.0 dictionary from a successful scan's `report` member. It first calls
+the existing `validate_report_dict`, then validates structure using Pydantic,
+then compares counts, reference coverage, resource, scanner, and severity.
+It returns a fresh `SecurityAnalysis`, or raises `AnalysisValidationError` with
+a fixed safe message. It never repairs or mutates either input. Tool envelopes,
+including failed responses, are rejected; callers must explicitly check success
+before extracting the report. Dictionaries cannot prove their own provenance:
+the caller must supply the actual trusted scanner report, not model-authored data.
+
+This executable example uses synthetic explanations, not verified model outputs:
+
+```python
+from agents.cloud_security_guardian.tools import scan_security_configuration
+from agents.cloud_security_guardian.response_validation import (
+    validate_analysis, AnalysisValidationError,
+)
+
+response = scan_security_configuration()
+if response["status"] != "success":
+    raise RuntimeError("No successful report is available")
+report = response["report"]
+candidate = {
+    "executive_summary": "Illustrative analysis of fictional snapshots.",
+    "total_findings": report["total_findings"],
+    "severity_counts": dict(report["severity_counts"]),
+    "findings": [
+        {
+            "finding_index": i, "scanner": finding["scanner"],
+            "resource": finding["resource"], "severity": finding["severity"],
+            "explanation": "Illustrative explanation; requires human review.",
+            "potential_implications": "Potential risk, not verified exposure.",
+            "recommended_action": "Review the original scanner recommendation.",
+        }
+        for i, finding in enumerate(report["findings"])
+    ],
+    "analysis_limitations": ["Fictional local snapshots only."],
+}
+validated = validate_analysis(candidate, report)  # accepts all 17 references
+candidate["findings"][0]["severity"] = "LOW"
+try:
+    validate_analysis(candidate, report)
+except AnalysisValidationError as error:
+    print(str(error))  # Finding identity or severity does not match the report.
+```
+
+An empty source requires zero counts and an empty findings list, but still a
+summary and limitations. Unknown references, duplicate or missing findings,
+changed scanner attribution, changed severity, and mismatched counts fail.
+The safe API messages contain no source values, candidate values, paths, or
+underlying validation errors; exception chaining is suppressed for display.
+Do not expose exception objects, locals, or raw Pydantic error details externally.
+
+### Authoritative data and limits
+
+Generated explanations remain separate from original findings and evidence.
+There is no generated evidence field and no merging back into the source report.
+Structural validation checks fields and types; semantic consistency here checks
+only the specified relationships to the report. Neither proves that arbitrary
+natural-language explanations, implications, recommendations, or summary counts
+written in prose are true. Text remains untrusted; validation is not sanitization,
+secret redaction, prompt-injection defense, or remediation authorization.
+Validation describes a point-in-time result; later mutation requires revalidation.
+References do not provide cross-report identity or cryptographic provenance.
+
+### ADK compatibility and dependencies
+
+Research used the [official ADK structured-output documentation](https://adk.dev/agents/llm-agents/#structure-data-input-and-output),
+[Pydantic strict-mode documentation](https://docs.pydantic.dev/latest/concepts/strict_mode/),
+and [Pydantic configuration reference](https://docs.pydantic.dev/latest/api/config/).
+Installed ADK 2.14.1 explicitly supports `output_schema` alongside `tools`.
+ADK documentation notes that some backends use an additional `set_model_response`
+function to deliver structured output, with model-dependent reliability.
+No output schema is attached here: applying this full-scan schema globally would
+also constrain ordinary conversation and failures, and backend behavior has not
+been verified through live requests. The existing single-tool agent stays intact.
+
+Pydantic was transitive through ADK; it is now an explicit direct dependency
+pinned to the already installed compatible `pydantic==2.14.3`. No unrelated
+packages were upgraded. Runtime routing, model invocation, and end-to-end
+validation enforcement are deferred. No retries or model self-correction exist.
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_agent_response_models.py tests/test_agent_response_validation.py
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pip check
+git diff --check
+```
+
+Tests use synthetic candidates and the real fictional sample report, with network
+and credential discovery blocked during integration coverage. Milestone 5.3.5,
+Agent Testing, is the next planned step; no live model evaluations were added.
