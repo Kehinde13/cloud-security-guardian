@@ -37,6 +37,7 @@ def import_in_fresh_process(model=None):
         scans.run_scan = forbidden
         from agents.cloud_security_guardian import agent
         from agents.cloud_security_guardian.tools import scan_security_configuration
+        from agents.cloud_security_guardian.instructions import SECURITY_AGENT_INSTRUCTIONS
         from google.adk.agents import LlmAgent
         root = agent.root_agent
         assert isinstance(root, LlmAgent)
@@ -45,7 +46,7 @@ def import_in_fresh_process(model=None):
         assert root.tools == [scan_security_configuration]
         assert root.sub_agents == []
         assert root.code_executor is None
-        assert "Never claim a successful scan" in root.instruction
+        assert root.instruction == SECURITY_AGENT_INSTRUCTIONS
         print(root.model)
     ''')
     return subprocess.run([sys.executable, "-B", "-c", script], cwd=ROOT,
