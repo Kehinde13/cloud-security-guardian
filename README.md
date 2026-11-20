@@ -946,6 +946,105 @@ Validation does not authorize remediation or judge free-form advice.
 git diff --check
 ```
 
-Milestone 5.3.6, Local Integration, is planned to connect local execution and
-explicit validation handling at the application boundary. That integration,
-retries, live model calls, and runtime enforcement are not implemented here.
+Milestone 5.3.6 below adds a dedicated application acceptance boundary. The
+standalone Runner workflows above intentionally continue to demonstrate behavior
+without that boundary; they do not automatically enforce response validation.
+
+
+## Local execution and validation boundary (Milestone 5.3.6)
+
+`agents/cloud_security_guardian/local_workflow.py` provides two asynchronous APIs:
+
+- `await run_full_scan()` returns a `SecurityAnalysis` only after structural and
+  report-consistency validation. It never returns raw candidate text on failure.
+- `await run_conversation(message)` returns unvalidated conversational text.
+  It does not require complete finding coverage and must not be labeled verified.
+
+Each call clones the existing agent, preserves its configured model and single
+read-only tool, and creates a fresh `InMemorySessionService` and ADK Runner.
+No conversation or session is persisted across calls. A trusted Python `model=`
+parameter allows fake-model injection for tests; it is not a model-controlled input.
+
+### How enforcement works
+
+The full-scan request includes the JSON schema in the request text without
+attaching an ADK output schema or adding a formatting tool. This guides output;
+the application validator, not this prompt, decides whether it is accepted.
+
+A per-request `before_tool_callback` permits only one argument-free call to the
+existing scan tool. Repeated calls, including parallel calls, are rejected before
+a second scan executes, avoiding duplicate or conflicting authoritative results.
+The `after_tool_callback` checks the successful tool envelope, calls the existing
+report validator, and captures a deep copy of the report directly from tool
+execution. It does not overwrite the tool response or use model-authored text or
+function-response events as authority. Failed or malformed results abort the run.
+
+The application buffers events privately through completion and requires exactly
+one non-empty final response. It parses strict JSON (no duplicate object keys or
+NaN/Infinity), then calls `validate_analysis(candidate, captured_report)` before
+returning any full-scan result. Missing authority, malformed or multiple finals,
+missing/duplicate findings, altered severity, incorrect counts, fabricated
+references, and extra remediation fields fail closed. No additional scan is run
+for validation; original evidence stays in the captured scanner report.
+
+`LocalWorkflowError` exposes fixed safe messages without candidate content,
+filesystem paths, credentials, or underlying exception details. No partial output,
+automatic correction, or application retry is returned. Runner calls are bounded
+to three model turns and closed on success or failure. This is not a wall-clock
+timeout or a general sandbox for SDK/network behavior. Direct `adk run` remains a
+general agent interface and **does not use this application validation boundary**.
+
+Compatibility was verified using installed ADK 2.14.1 tool-caller source and
+real Runner tests, alongside official [callbacks](https://adk.dev/callbacks/types-of-callbacks/),
+[events](https://adk.dev/events/), [sessions](https://adk.dev/sessions/session/),
+and [structured-output guidance](https://adk.dev/agents/llm-agents/#structure-data-input-and-output).
+The callback capture happens after actual tool execution; acceptance happens only
+in this application after the event stream has completed. Session state and
+model claims are not used as authoritative report storage.
+
+### Local commands (live Gemini, fictional local snapshots)
+
+From the repository root, intentionally configure `GOOGLE_API_KEY` in your local
+process environment before running. `GUARDIAN_GEMINI_MODEL` retains its existing
+default `gemini-flash-latest`. This entry point does not automatically load `.env`.
+Use the Gemini Developer API environment; clear inherited cloud-backend selectors.
+Do not paste keys into committed files or commands you intend to share.
+
+```powershell
+.\.venv\Scripts\python.exe -m agents.cloud_security_guardian.local_workflow --help
+.\.venv\Scripts\python.exe -m agents.cloud_security_guardian.local_workflow --full-scan
+.\.venv\Scripts\python.exe -m agents.cloud_security_guardian.local_workflow --message "What can you analyze?"
+```
+
+The latter two commands can make paid Gemini requests; none were executed against
+a live model during verification. Missing credentials fail before Runner execution.
+Full-scan success prints JSON with `status: validated`, `validation: report consistency only`,
+and `analysis`. Failure prints a safe error to stderr, emits no candidate analysis
+to stdout, and exits with code 1. Conversation output is explicitly labeled
+`unvalidated_conversation`. CLI diagnostics from logging are suppressed during
+execution; Python embedding callers must keep their diagnostic logs private.
+No report export, resource modification, or remediation is performed.
+
+### Verification and remaining limits
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests/test_local_workflow.py
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m pip check
+git diff --check
+```
+
+Tests use real Runner execution and synthetic model output with network and
+credential discovery blocked. They cover valid 17-finding acceptance, rejected
+inconsistent output, missing/forged authority, repeated scan attempts, failed
+scans, malformed JSON/finals, source-copy isolation, CLI output gating, and
+unvalidated general conversation. Existing tool and scanner tests remain intact.
+
+Validated means structural and report consistency, not factual correctness of
+arbitrary explanatory prose, prompt-injection resistance, secret redaction, or
+permission to act. General conversational output is still untrusted. Return
+objects remain mutable: callers must not present later edits as validated.
+Snapshots must remain fictional and secret-free. No live Gemini compliance has
+been established. Live Google Cloud integration would still require separately
+designed collection, permissions, provenance, data-handling controls, and testing;
+none of those capabilities, deployments, or remediation paths are implemented.
